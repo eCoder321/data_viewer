@@ -1,0 +1,5 @@
+{
+  "name": "DataLens",
+  "description": "A local-first spreadsheet viewer for scannable data grids and comfortable long-form reading.",
+  "requestFramePermissions": []
+}
