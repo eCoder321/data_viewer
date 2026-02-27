@@ -167,11 +167,6 @@ export default function App() {
   };
 
   const handleRowClick = (index: number) => {
-    if (Object.keys(pendingChanges).length > 0) {
-      if (!confirm('You have unsaved changes. Do you want to discard them?')) {
-        return;
-      }
-    }
     setSelectedIndex(index);
     setIsPanelOpen(true);
     setPendingChanges({});
@@ -180,15 +175,15 @@ export default function App() {
 
   const navigateRecord = (direction: 'prev' | 'next') => {
     if (selectedIndex === null) return;
-    if (Object.keys(pendingChanges).length > 0) {
-      if (!confirm('You have unsaved changes. Do you want to discard them?')) {
-        return;
-      }
-    }
     const newIndex = direction === 'prev' 
       ? Math.max(0, selectedIndex - 1) 
       : Math.min(filteredRows.length - 1, selectedIndex + 1);
     setSelectedIndex(newIndex);
+    setPendingChanges({});
+    setEditingField(null);
+  };
+
+  const discardChanges = () => {
     setPendingChanges({});
     setEditingField(null);
   };
@@ -261,11 +256,6 @@ export default function App() {
   };
 
   const resetApp = () => {
-    if (Object.keys(pendingChanges).length > 0) {
-      if (!confirm('You have unsaved changes. Do you want to discard them?')) {
-        return;
-      }
-    }
     setData(null);
     setSearchQuery('');
     setSelectedIndex(null);
@@ -529,23 +519,30 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <AnimatePresence>
                     {Object.keys(pendingChanges).length > 0 && (
-                      <motion.button
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                        onClick={saveChanges}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all"
+                      <motion.div 
+                        initial={{ opacity: 0, x: 10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 10 }}
+                        className="flex items-center gap-2"
                       >
-                        <Check size={16} />
-                        Save Changes
-                      </motion.button>
+                        <button
+                          onClick={discardChanges}
+                          className="px-4 py-2 text-stone-500 hover:text-stone-800 text-sm font-bold transition-colors"
+                        >
+                          Discard
+                        </button>
+                        <button
+                          onClick={saveChanges}
+                          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all"
+                        >
+                          <Check size={16} />
+                          Save Changes
+                        </button>
+                      </motion.div>
                     )}
                   </AnimatePresence>
                   <button
                     onClick={() => {
-                      if (Object.keys(pendingChanges).length > 0) {
-                        if (!confirm('Discard unsaved changes?')) return;
-                      }
                       setIsPanelOpen(false);
                       setPendingChanges({});
                       setEditingField(null);
