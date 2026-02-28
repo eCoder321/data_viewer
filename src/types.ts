@@ -6,4 +6,5 @@ export interface SpreadsheetData {
   headers: string[];
   rows: DataRow[];
   fileName: string;
+  fileId?: string;
 }

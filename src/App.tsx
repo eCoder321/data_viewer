@@ -20,7 +20,11 @@ import {
   EyeOff,
   Check,
   Plus,
-  Download
+  Download,
+  Cloud,
+  RefreshCw,
+  Filter,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -28,6 +32,14 @@ import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { DataRow, SpreadsheetData } from './types';
+
+// Declare Google global types
+declare global {
+  interface Window {
+    google: any;
+    gapi: any;
+  }
+}
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -45,13 +57,112 @@ export default function App() {
     direction: 'asc'
   });
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set());
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
+  const [columnSearchQuery, setColumnSearchQuery] = useState('');
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
+  const [activeFilterColumn, setActiveFilterColumn] = useState<string | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
   const [pendingChanges, setPendingChanges] = useState<Record<string, string | number | boolean | null>>({});
   const [editingField, setEditingField] = useState<string | null>(null);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load Google Scripts
+  React.useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      window.gapi.load('picker', () => {});
+    };
+    document.body.appendChild(script);
+
+    const handleMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) return;
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        openPicker();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const handleGoogleConnect = async () => {
+    setIsGoogleLoading(true);
+    try {
+      const response = await fetch('/api/auth/google/url');
+      const { url } = await response.json();
+      window.open(url, 'google_oauth', 'width=600,height=700');
+    } catch (error) {
+      console.error('Failed to get auth URL', error);
+      alert('Failed to connect to Google Drive');
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
+  const openPicker = async () => {
+    try {
+      const response = await fetch('/api/auth/google/token');
+      if (!response.ok) {
+        handleGoogleConnect();
+        return;
+      }
+      const { token, apiKey } = await response.json();
+
+      const picker = new window.google.picker.PickerBuilder()
+        .addView(new window.google.picker.DocsView(window.google.picker.ViewId.SPREADSHEETS))
+        .setOAuthToken(token)
+        .setDeveloperKey(apiKey)
+        .setCallback(async (data: any) => {
+          if (data.action === window.google.picker.Action.PICKED) {
+            const file = data.docs[0];
+            fetchGoogleSheet(file.id, file.name, token);
+          }
+        })
+        .build();
+      picker.setVisible(true);
+    } catch (error) {
+      console.error('Picker error', error);
+    }
+  };
+
+  const fetchGoogleSheet = async (fileId: string, fileName: string, token: string) => {
+    try {
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/csv`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      const csvText = await response.text();
+      
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const headers = results.meta.fields || [];
+          setData({
+            headers,
+            rows: results.data as DataRow[],
+            fileName: fileName,
+            fileId: fileId
+          });
+          setVisibleColumns(new Set(headers));
+          setColumnOrder(headers);
+        }
+      });
+    } catch (error) {
+      console.error('Failed to fetch sheet', error);
+      alert('Failed to fetch Google Sheet content');
+    }
+  };
 
   const handleFileUpload = useCallback((file: File) => {
     const reader = new FileReader();
@@ -69,6 +180,7 @@ export default function App() {
             fileName: file.name
           });
           setVisibleColumns(new Set(headers));
+          setColumnOrder(headers);
         }
       });
     } else if (extension === 'xlsx' || extension === 'xls') {
@@ -87,6 +199,7 @@ export default function App() {
             fileName: file.name
           });
           setVisibleColumns(new Set(headers));
+          setColumnOrder(headers);
         }
       };
       reader.readAsBinaryString(file);
@@ -124,6 +237,14 @@ export default function App() {
         )
       );
     }
+
+    // Column specific filters
+    Object.entries(columnFilters).forEach(([col, selectedValues]) => {
+      const values = selectedValues as Set<string>;
+      if (values.size > 0) {
+        rows = rows.filter(row => values.has(String(row[col] ?? '')));
+      }
+    });
 
     // Sort
     if (sortConfig.key) {
@@ -164,6 +285,38 @@ export default function App() {
       next.add(header);
     }
     setVisibleColumns(next);
+  };
+
+  const toggleColumnFilterValue = (column: string, value: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      const currentSet = new Set(next[column] || []);
+      if (currentSet.has(value)) {
+        currentSet.delete(value);
+      } else {
+        currentSet.add(value);
+      }
+      if (currentSet.size === 0) {
+        delete next[column];
+      } else {
+        next[column] = currentSet;
+      }
+      return next;
+    });
+  };
+
+  const clearColumnFilter = (column: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      delete next[column];
+      return next;
+    });
+  };
+
+  const getUniqueValues = (column: string) => {
+    if (!data) return [];
+    const values = new Set(data.rows.map(row => String(row[column] ?? '')));
+    return Array.from(values).sort();
   };
 
   const handleRowClick = (index: number) => {
@@ -237,13 +390,14 @@ export default function App() {
       rows: updatedRows
     });
     setVisibleColumns(prev => new Set([...prev, trimmedName]));
+    setColumnOrder(prev => [...prev, trimmedName]);
     setIsAddingColumn(false);
     setNewColumnName('');
   };
 
   const downloadCSV = () => {
     if (!data) return;
-    const csv = Papa.unparse(data.rows);
+    const csv = Papa.unparse(data.rows, { columns: columnOrder });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
@@ -253,6 +407,63 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const syncToDrive = async () => {
+    if (!data?.fileId) return;
+    setIsSyncing(true);
+    try {
+      const tokenRes = await fetch('/api/auth/google/token');
+      if (!tokenRes.ok) throw new Error('Not authenticated');
+      const { token } = await tokenRes.json();
+
+      // 1. Get spreadsheet metadata to find the first sheet name
+      const metaRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${data.fileId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      const meta = await metaRes.json();
+      const firstSheetName = meta.sheets[0].properties.title;
+
+      // 2. Prepare 2D array
+      const values = [
+        columnOrder,
+        ...data.rows.map(row => columnOrder.map(h => row[h] ?? ''))
+      ];
+
+      // 3. Update the sheet
+      const updateRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${data.fileId}/values/${encodeURIComponent(firstSheetName)}!A1?valueInputOption=USER_ENTERED`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ values })
+        }
+      );
+
+      if (!updateRes.ok) throw new Error('Failed to update sheet');
+      
+      alert('Successfully synced changes to Google Sheets!');
+    } catch (error) {
+      console.error('Sync error', error);
+      alert('Failed to sync changes to Google Sheets');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const moveColumn = (draggedHeader: string, targetHeader: string) => {
+    const oldIndex = columnOrder.indexOf(draggedHeader);
+    const newIndex = columnOrder.indexOf(targetHeader);
+    const newOrder = [...columnOrder];
+    newOrder.splice(oldIndex, 1);
+    newOrder.splice(newIndex, 0, draggedHeader);
+    setColumnOrder(newOrder);
   };
 
   const resetApp = () => {
@@ -280,32 +491,51 @@ export default function App() {
             <p className="text-stone-500 text-lg">Local-first spreadsheet viewer for high-density scanning.</p>
           </div>
 
-          <div
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onClick={() => fileInputRef.current?.click()}
-            className={cn(
-              "relative group cursor-pointer border-2 border-dashed rounded-3xl p-12 transition-all duration-300",
-              isDragging 
-                ? "border-black bg-stone-100 scale-[1.02]" 
-                : "border-stone-300 bg-white hover:border-stone-400 hover:shadow-lg"
-            )}
-          >
-            <input 
-              type="file" 
-              ref={fileInputRef}
-              onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-            />
-            <div className="flex flex-col items-center">
-              <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                <Upload className="text-stone-600" size={24} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              className={cn(
+                "relative group cursor-pointer border-2 border-dashed rounded-3xl p-8 transition-all duration-300",
+                isDragging 
+                  ? "border-black bg-stone-100 scale-[1.02]" 
+                  : "border-stone-300 bg-white hover:border-stone-400 hover:shadow-lg"
+              )}
+            >
+              <input 
+                type="file" 
+                ref={fileInputRef}
+                onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+              />
+              <div className="flex flex-col items-center">
+                <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <Upload className="text-stone-600" size={20} />
+                </div>
+                <p className="text-base font-medium text-stone-900">Local File</p>
+                <p className="text-xs text-stone-500 mt-1">CSV or Excel</p>
               </div>
-              <p className="text-lg font-medium text-stone-900">Drop your spreadsheet here</p>
-              <p className="text-sm text-stone-500 mt-1">Supports CSV and Excel (.xlsx, .xls)</p>
             </div>
+
+            <button
+              onClick={handleGoogleConnect}
+              disabled={isGoogleLoading}
+              className="relative group cursor-pointer border-2 border-stone-100 rounded-3xl p-8 transition-all duration-300 bg-white hover:border-stone-400 hover:shadow-lg flex flex-col items-center justify-center disabled:opacity-50"
+            >
+              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <Cloud className="text-blue-600" size={20} />
+              </div>
+              <p className="text-base font-medium text-stone-900">Google Drive</p>
+              <p className="text-xs text-stone-500 mt-1">Import Sheets directly</p>
+              {isGoogleLoading && (
+                <div className="absolute inset-0 bg-white/60 rounded-3xl flex items-center justify-center">
+                  <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+            </button>
           </div>
 
           <div className="mt-12 flex items-center justify-center gap-8 text-stone-400">
@@ -357,6 +587,23 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2 relative">
+          {data.fileId && (
+            <button
+              onClick={syncToDrive}
+              disabled={isSyncing}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold transition-all",
+                isSyncing 
+                  ? "bg-stone-100 text-stone-400" 
+                  : "bg-blue-50 text-blue-600 hover:bg-blue-100"
+              )}
+              title="Sync changes back to Google Sheets"
+            >
+              <RefreshCw size={16} className={cn(isSyncing && "animate-spin")} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync to Drive'}</span>
+            </button>
+          )}
+
           <button
             onClick={downloadCSV}
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium text-stone-600 hover:bg-stone-100 transition-all"
@@ -399,11 +646,23 @@ export default function App() {
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-2xl border border-stone-200 z-40 p-2 overflow-hidden"
                 >
-                  <div className="px-3 py-2 border-b border-stone-100 mb-1">
+                  <div className="px-3 py-2 border-b border-stone-100 mb-1 space-y-2">
                     <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Display Columns</span>
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-stone-300" size={12} />
+                      <input 
+                        type="text"
+                        placeholder="Filter columns..."
+                        value={columnSearchQuery}
+                        onChange={(e) => setColumnSearchQuery(e.target.value)}
+                        className="w-full bg-stone-50 border border-stone-100 rounded-lg py-1 pl-7 pr-2 text-xs outline-none focus:border-stone-300 transition-all"
+                      />
+                    </div>
                   </div>
                   <div className="max-h-[300px] overflow-y-auto">
-                    {data.headers.map(header => (
+                    {columnOrder
+                      .filter(h => h.toLowerCase().includes(columnSearchQuery.toLowerCase()))
+                      .map(header => (
                       <button
                         key={header}
                         onClick={() => toggleColumn(header)}
@@ -431,11 +690,19 @@ export default function App() {
           <table className="min-w-full border-separate border-spacing-0">
             <thead className="sticky top-0 z-10">
               <tr className="bg-stone-100">
-                {data.headers.filter(h => visibleColumns.has(h)).map((header) => (
+                {columnOrder.filter(h => visibleColumns.has(h)).map((header: string) => (
                   <th
                     key={header}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('text/plain', header)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const draggedHeader = e.dataTransfer.getData('text/plain');
+                      if (draggedHeader !== header) moveColumn(draggedHeader, header);
+                    }}
                     onClick={() => toggleSort(header)}
-                    className="px-4 py-3 text-left text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200 whitespace-nowrap cursor-pointer hover:bg-stone-200 transition-colors group/th"
+                    className="px-4 py-3 text-left text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200 whitespace-nowrap cursor-grab active:cursor-grabbing hover:bg-stone-200 transition-colors group/th relative"
                   >
                     <div className="flex items-center gap-2">
                       {header}
@@ -449,7 +716,71 @@ export default function App() {
                           <ArrowUp size={12} />
                         )}
                       </div>
+                      
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveFilterColumn(activeFilterColumn === header ? null : header);
+                        }}
+                        className={cn(
+                          "ml-auto p-1 rounded hover:bg-stone-300 transition-colors",
+                          columnFilters[header] ? "text-blue-600 opacity-100" : "text-stone-400 opacity-0 group-hover/th:opacity-100"
+                        )}
+                      >
+                        <Filter size={12} fill={columnFilters[header] ? "currentColor" : "none"} />
+                      </button>
                     </div>
+
+                    {/* Filter Dropdown */}
+                    <AnimatePresence>
+                      {activeFilterColumn === header && (
+                        <>
+                          <div 
+                            className="fixed inset-0 z-30" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveFilterColumn(null);
+                            }} 
+                          />
+                          <motion.div
+                            initial={{ opacity: 0, y: 5, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 5, scale: 0.95 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="absolute left-0 top-full mt-1 w-56 bg-white rounded-xl shadow-2xl border border-stone-200 z-40 p-2 overflow-hidden normal-case font-normal tracking-normal"
+                          >
+                            <div className="px-2 py-1.5 border-b border-stone-100 mb-1 flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Filter Values</span>
+                              {columnFilters[header] && (
+                                <button 
+                                  onClick={() => clearColumnFilter(header)}
+                                  className="text-[10px] text-blue-600 font-bold hover:underline"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            <div className="max-h-[200px] overflow-y-auto space-y-0.5">
+                              {getUniqueValues(header).map((val: string) => (
+                                <button
+                                  key={val}
+                                  onClick={() => toggleColumnFilterValue(header, val)}
+                                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-stone-50 transition-colors text-xs text-stone-700 text-left"
+                                >
+                                  <div className={cn(
+                                    "w-3.5 h-3.5 border rounded flex items-center justify-center transition-colors shrink-0",
+                                    (columnFilters[header] as Set<string>)?.has(val) ? "bg-blue-600 border-blue-600 text-white" : "border-stone-300"
+                                  )}>
+                                    {(columnFilters[header] as Set<string>)?.has(val) && <Check size={10} strokeWidth={4} />}
+                                  </div>
+                                  <span className="truncate">{val || '(Empty)'}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
                   </th>
                 ))}
               </tr>
@@ -464,7 +795,7 @@ export default function App() {
                     selectedIndex === idx ? "bg-blue-50/50" : "hover:bg-stone-50"
                   )}
                 >
-                  {data.headers.filter(h => visibleColumns.has(h)).map((header) => (
+                  {columnOrder.filter(h => visibleColumns.has(h)).map((header) => (
                     <td
                       key={header}
                       className="px-4 py-2.5 text-sm text-stone-600 border-b border-stone-100 max-w-[200px] truncate"
@@ -513,7 +844,7 @@ export default function App() {
                     Record {selectedIndex + 1} of {filteredRows.length}
                   </span>
                   <h3 className="text-xl font-bold text-stone-900 truncate">
-                    {String(pendingChanges[data.headers[0]] ?? filteredRows[selectedIndex][data.headers[0]] ?? 'Detail View')}
+                    {String(pendingChanges[columnOrder[0]] ?? filteredRows[selectedIndex][columnOrder[0]] ?? 'Detail View')}
                   </h3>
                 </div>
                 <div className="flex items-center gap-2">
@@ -562,7 +893,7 @@ export default function App() {
                     Double-click any value below to edit
                   </p>
                 </div>
-                {data.headers.filter(h => visibleColumns.has(h)).map((header) => {
+                {columnOrder.filter(h => visibleColumns.has(h)).map((header) => {
                   const isEditing = editingField === header;
                   const value = pendingChanges[header] !== undefined 
                     ? pendingChanges[header] 
