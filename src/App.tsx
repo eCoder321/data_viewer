@@ -24,7 +24,13 @@ import {
   Cloud,
   RefreshCw,
   Filter,
-  ChevronDown
+  ChevronDown,
+  ExternalLink,
+  Mail,
+  Calendar,
+  Hash,
+  Info,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -46,6 +52,69 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const FormattedCell = ({ value }: { value: any }) => {
+  const strValue = String(value ?? '');
+  
+  // URL detection
+  if (/^https?:\/\/[^\s$.?#].[^\s]*$/i.test(strValue)) {
+    return (
+      <a 
+        href={strValue} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="text-blue-600 hover:underline flex items-center gap-1 inline-flex"
+      >
+        <span className="truncate max-w-[150px]">{strValue}</span>
+        <ExternalLink size={10} className="shrink-0" />
+      </a>
+    );
+  }
+
+  // Email detection
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(strValue)) {
+    return (
+      <a 
+        href={`mailto:${strValue}`}
+        onClick={(e) => e.stopPropagation()}
+        className="text-blue-600 hover:underline flex items-center gap-1 inline-flex"
+      >
+        <Mail size={10} className="shrink-0" />
+        <span className="truncate max-w-[150px]">{strValue}</span>
+      </a>
+    );
+  }
+
+  // Date detection (simple)
+  if (strValue.length > 5 && !isNaN(Date.parse(strValue)) && /^\d{4}-\d{2}-\d{2}/.test(strValue)) {
+    return (
+      <span className="flex items-center gap-1 text-stone-500 bg-stone-100 px-1.5 py-0.5 rounded text-[10px] font-medium w-fit">
+        <Calendar size={10} className="shrink-0" />
+        {new Date(strValue).toLocaleDateString()}
+      </span>
+    );
+  }
+
+  // Number detection
+  if (typeof value === 'number' || (!isNaN(parseFloat(strValue)) && isFinite(Number(strValue)))) {
+    return <span className="font-mono text-stone-700">{strValue}</span>;
+  }
+
+  // Conditional Formatting (Keywords)
+  const lowerVal = strValue.toLowerCase();
+  if (['urgent', 'high', 'critical', 'error', 'failed'].includes(lowerVal)) {
+    return <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold uppercase tracking-wider">{strValue}</span>;
+  }
+  if (['done', 'completed', 'success', 'active', 'paid'].includes(lowerVal)) {
+    return <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">{strValue}</span>;
+  }
+  if (['pending', 'medium', 'warning', 'processing'].includes(lowerVal)) {
+    return <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">{strValue}</span>;
+  }
+
+  return <span>{strValue}</span>;
+};
+
 export default function App() {
   const [data, setData] = useState<SpreadsheetData | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,6 +133,11 @@ export default function App() {
   const [activeFilterColumn, setActiveFilterColumn] = useState<string | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
+  const [hoveredColumn, setHoveredColumn] = useState<string | null>(null);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [resizingColumn, setResizingColumn] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [rowDensity, setRowDensity] = useState<'compact' | 'standard' | 'comfortable'>('standard');
   const [pendingChanges, setPendingChanges] = useState<Record<string, string | number | boolean | null>>({});
   const [editingField, setEditingField] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
@@ -319,6 +393,38 @@ export default function App() {
     return Array.from(values).sort();
   };
 
+  const getColumnStats = (column: string) => {
+    if (!data || filteredRows.length === 0) return null;
+    const values = filteredRows.map(row => {
+      const val = row[column];
+      return typeof val === 'number' ? val : parseFloat(String(val));
+    }).filter(v => !isNaN(v));
+
+    if (values.length === 0) return null;
+
+    const sum = values.reduce((a, b) => a + b, 0);
+    const avg = sum / values.length;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    return { sum, avg, min, max, count: values.length };
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!data || isPanelOpen || editingField) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev === null || prev >= filteredRows.length - 1) ? 0 : prev + 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev === null || prev <= 0) ? filteredRows.length - 1 : prev - 1);
+    } else if (e.key === 'Enter' && selectedIndex !== null) {
+      e.preventDefault();
+      setIsPanelOpen(true);
+    }
+  };
+
   const handleRowClick = (index: number) => {
     setSelectedIndex(index);
     setIsPanelOpen(true);
@@ -466,6 +572,69 @@ export default function App() {
     setColumnOrder(newOrder);
   };
 
+  const startResizing = (e: React.MouseEvent, header: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startWidth = columnWidths[header] || 150;
+    setResizingColumn({ key: header, startX: e.pageX, startWidth });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!resizingColumn) return;
+    const deltaX = e.pageX - resizingColumn.startX;
+    const newWidth = Math.max(80, resizingColumn.startWidth + deltaX);
+    setColumnWidths(prev => ({
+      ...prev,
+      [resizingColumn.key]: newWidth
+    }));
+  };
+
+  const handleMouseUp = () => {
+    setResizingColumn(null);
+  };
+
+  const toggleRowSelection = (e: React.MouseEvent, index: number) => {
+    e.stopPropagation();
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedRows.size === filteredRows.length) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(filteredRows.map((_, i) => i)));
+    }
+  };
+
+  const deleteSelected = () => {
+    if (!data || selectedRows.size === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedRows.size} records?`)) return;
+
+    const rowsToDelete = Array.from(selectedRows).map(idx => filteredRows[idx]);
+    const updatedRows = data.rows.filter(row => !rowsToDelete.includes(row));
+
+    setData({
+      ...data,
+      rows: updatedRows
+    });
+    setSelectedRows(new Set());
+    setSelectedIndex(null);
+    setIsPanelOpen(false);
+  };
+
+  const getDensityPadding = () => {
+    switch (rowDensity) {
+      case 'compact': return 'py-1 px-2 text-xs';
+      case 'comfortable': return 'py-4 px-6 text-base';
+      default: return 'py-2.5 px-4 text-sm';
+    }
+  };
+
   const resetApp = () => {
     setData(null);
     setSearchQuery('');
@@ -554,7 +723,13 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col font-sans overflow-hidden">
+    <div 
+      className="min-h-screen bg-stone-50 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900 outline-none"
+      onKeyDown={handleKeyDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      tabIndex={0}
+    >
       {/* Header */}
       <header className="h-16 border-bottom border-stone-200 flex items-center justify-between px-6 bg-white shrink-0 z-20">
         <div className="flex items-center gap-4">
@@ -587,6 +762,16 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2 relative">
+          {selectedRows.size > 0 && (
+            <button
+              onClick={deleteSelected}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold bg-red-50 text-red-600 hover:bg-red-100 transition-all mr-2"
+            >
+              <Trash2 size={16} />
+              <span>Delete {selectedRows.size}</span>
+            </button>
+          )}
+
           {data.fileId && (
             <button
               onClick={syncToDrive}
@@ -632,6 +817,21 @@ export default function App() {
             <Columns size={16} />
             <span>Columns</span>
           </button>
+
+          <div className="flex bg-stone-100 p-1 rounded-xl gap-1">
+            {(['compact', 'standard', 'comfortable'] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setRowDensity(d)}
+                className={cn(
+                  "px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-tighter transition-all",
+                  rowDensity === d ? "bg-white text-black shadow-sm" : "text-stone-400 hover:text-stone-600"
+                )}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
 
           <AnimatePresence>
             {isColumnMenuOpen && (
@@ -690,6 +890,19 @@ export default function App() {
           <table className="min-w-full border-separate border-spacing-0">
             <thead className="sticky top-0 z-10">
               <tr className="bg-stone-100">
+                <th className="w-10 px-4 py-3 border-b border-stone-200 bg-stone-100 sticky left-0 z-20">
+                  <button 
+                    onClick={toggleAllSelection}
+                    className={cn(
+                      "w-4 h-4 border rounded flex items-center justify-center transition-colors",
+                      selectedRows.size === filteredRows.length && filteredRows.length > 0
+                        ? "bg-blue-600 border-blue-600 text-white" 
+                        : "border-stone-300 bg-white"
+                    )}
+                  >
+                    {selectedRows.size === filteredRows.length && filteredRows.length > 0 && <Check size={10} strokeWidth={4} />}
+                  </button>
+                </th>
                 {columnOrder.filter(h => visibleColumns.has(h)).map((header: string) => (
                   <th
                     key={header}
@@ -701,8 +914,15 @@ export default function App() {
                       const draggedHeader = e.dataTransfer.getData('text/plain');
                       if (draggedHeader !== header) moveColumn(draggedHeader, header);
                     }}
+                    onMouseEnter={() => setHoveredColumn(header)}
+                    onMouseLeave={() => setHoveredColumn(null)}
                     onClick={() => toggleSort(header)}
-                    className="px-4 py-3 text-left text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200 whitespace-nowrap cursor-grab active:cursor-grabbing hover:bg-stone-200 transition-colors group/th relative"
+                    style={{ width: columnWidths[header] || 150 }}
+                    className={cn(
+                      "text-left text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200 whitespace-nowrap cursor-grab active:cursor-grabbing transition-colors group/th relative",
+                      getDensityPadding(),
+                      hoveredColumn === header ? "bg-stone-200" : "bg-stone-100"
+                    )}
                   >
                     <div className="flex items-center gap-2">
                       {header}
@@ -730,6 +950,15 @@ export default function App() {
                         <Filter size={12} fill={columnFilters[header] ? "currentColor" : "none"} />
                       </button>
                     </div>
+
+                    {/* Resize Handle */}
+                    <div 
+                      onMouseDown={(e) => startResizing(e, header)}
+                      className={cn(
+                        "absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 transition-colors z-20",
+                        resizingColumn?.key === header ? "bg-blue-500 w-0.5" : "bg-transparent"
+                      )}
+                    />
 
                     {/* Filter Dropdown */}
                     <AnimatePresence>
@@ -792,15 +1021,32 @@ export default function App() {
                   onClick={() => handleRowClick(idx)}
                   className={cn(
                     "group cursor-pointer transition-colors border-b border-stone-100",
-                    selectedIndex === idx ? "bg-blue-50/50" : "hover:bg-stone-50"
+                    selectedIndex === idx ? "bg-blue-50/50" : "hover:bg-stone-50 odd:bg-white even:bg-stone-50/30",
+                    selectedRows.has(idx) && "bg-blue-50/30"
                   )}
                 >
+                  <td className={cn("w-10 border-b border-stone-100 sticky left-0 z-10 bg-inherit", getDensityPadding())}>
+                    <button 
+                      onClick={(e) => toggleRowSelection(e, idx)}
+                      className={cn(
+                        "w-4 h-4 border rounded flex items-center justify-center transition-colors",
+                        selectedRows.has(idx) ? "bg-blue-600 border-blue-600 text-white" : "border-stone-300 bg-white"
+                      )}
+                    >
+                      {selectedRows.has(idx) && <Check size={10} strokeWidth={4} />}
+                    </button>
+                  </td>
                   {columnOrder.filter(h => visibleColumns.has(h)).map((header) => (
                     <td
                       key={header}
-                      className="px-4 py-2.5 text-sm text-stone-600 border-b border-stone-100 max-w-[200px] truncate"
+                      style={{ width: columnWidths[header] || 150 }}
+                      className={cn(
+                        "text-stone-600 border-b border-stone-100 truncate transition-colors",
+                        getDensityPadding(),
+                        hoveredColumn === header && "bg-blue-50/20"
+                      )}
                     >
-                      {String(row[header] ?? '')}
+                      <FormattedCell value={row[header]} />
                     </td>
                   ))}
                 </tr>
@@ -816,6 +1062,37 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* Footer Stats */}
+      <div className="h-10 bg-white border-t border-stone-200 flex items-center px-4 justify-between text-[10px] font-bold text-stone-400 uppercase tracking-widest shrink-0 z-20">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
+            <Hash size={12} />
+            <span>{filteredRows.length} Rows</span>
+            {filteredRows.length !== data.rows.length && (
+              <span className="text-blue-500">(Filtered from {data.rows.length})</span>
+            )}
+          </div>
+          {hoveredColumn && getColumnStats(hoveredColumn) && (
+            <div className="flex items-center gap-4 text-stone-500 border-l border-stone-100 pl-4">
+              <div className="flex items-center gap-1.5">
+                <span className="text-stone-300">Sum:</span>
+                <span className="font-mono text-stone-600">{getColumnStats(hoveredColumn)?.sum.toLocaleString()}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-stone-300">Avg:</span>
+                <span className="font-mono text-stone-600">{getColumnStats(hoveredColumn)?.avg.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5">
+            <Info size={12} />
+            <span>Use ↑↓ to navigate • Enter to view • Drag headers to resize</span>
+          </div>
+        </div>
+      </div>
 
       {/* Detail Side Panel */}
       <AnimatePresence>
