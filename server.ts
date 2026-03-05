@@ -13,23 +13,43 @@ app.use(cookieParser());
 app.use(express.json());
 
 const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  `${process.env.APP_URL}/auth/callback`
+  process.env.GOOGLE_CLIENT_ID || "MISSING_CLIENT_ID",
+  process.env.GOOGLE_CLIENT_SECRET || "MISSING_CLIENT_SECRET",
+  `${process.env.APP_URL || "http://localhost:3000"}/auth/callback`
 );
 
 // API Routes
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", env: { 
+    hasClientId: !!process.env.GOOGLE_CLIENT_ID,
+    hasClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+    hasApiKey: !!process.env.GOOGLE_API_KEY,
+    appUrl: process.env.APP_URL
+  }});
+});
+
 app.get("/api/auth/google/url", (req, res) => {
-  const url = client.generateAuthUrl({
-    access_type: "offline",
-    scope: [
-      "https://www.googleapis.com/auth/drive.readonly",
-      "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/spreadsheets",
-    ],
-    prompt: "consent",
-  });
-  res.json({ url });
+  console.log("Generating auth URL...");
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      console.error("Missing Google OAuth credentials");
+      return res.status(500).json({ error: "Missing Google OAuth credentials in environment" });
+    }
+    const url = client.generateAuthUrl({
+      access_type: "offline",
+      scope: [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets",
+      ],
+      prompt: "consent",
+    });
+    console.log("Auth URL generated successfully");
+    res.json({ url });
+  } catch (error) {
+    console.error("Error generating auth URL:", error);
+    res.status(500).json({ error: "Failed to generate auth URL" });
+  }
 });
 
 app.get("/auth/callback", async (req, res) => {
@@ -87,6 +107,12 @@ if (process.env.NODE_ENV !== "production") {
     res.sendFile("dist/index.html", { root: "." });
   });
 }
+
+// Global error handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error", details: err.message });
+});
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);

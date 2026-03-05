@@ -30,7 +30,8 @@ import {
   Calendar,
   Hash,
   Info,
-  Trash2
+  Trash2,
+  ChevronsRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -138,6 +139,7 @@ export default function App() {
   const [resizingColumn, setResizingColumn] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [rowDensity, setRowDensity] = useState<'compact' | 'standard' | 'comfortable'>('standard');
+  const [gridEditingCell, setGridEditingCell] = useState<{ rowIndex: number; columnKey: string } | null>(null);
   const [pendingChanges, setPendingChanges] = useState<Record<string, string | number | boolean | null>>({});
   const [editingField, setEditingField] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
@@ -169,11 +171,15 @@ export default function App() {
     setIsGoogleLoading(true);
     try {
       const response = await fetch('/api/auth/google/url');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown server error' }));
+        throw new Error(errorData.error || `Server responded with ${response.status}`);
+      }
       const { url } = await response.json();
       window.open(url, 'google_oauth', 'width=600,height=700');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to get auth URL', error);
-      alert('Failed to connect to Google Drive');
+      alert(`Failed to connect to Google Drive: ${error.message || 'Network error'}`);
     } finally {
       setIsGoogleLoading(false);
     }
@@ -183,8 +189,12 @@ export default function App() {
     try {
       const response = await fetch('/api/auth/google/token');
       if (!response.ok) {
-        handleGoogleConnect();
-        return;
+        if (response.status === 401) {
+          handleGoogleConnect();
+          return;
+        }
+        const errorData = await response.json().catch(() => ({ error: 'Unknown server error' }));
+        throw new Error(errorData.error || `Server responded with ${response.status}`);
       }
       const { token, apiKey } = await response.json();
 
@@ -520,7 +530,14 @@ export default function App() {
     setIsSyncing(true);
     try {
       const tokenRes = await fetch('/api/auth/google/token');
-      if (!tokenRes.ok) throw new Error('Not authenticated');
+      if (!tokenRes.ok) {
+        if (tokenRes.status === 401) {
+          handleGoogleConnect();
+          return;
+        }
+        const errorData = await tokenRes.json().catch(() => ({ error: 'Unknown server error' }));
+        throw new Error(errorData.error || `Server responded with ${tokenRes.status}`);
+      }
       const { token } = await tokenRes.json();
 
       // 1. Get spreadsheet metadata to find the first sheet name
@@ -633,6 +650,27 @@ export default function App() {
       case 'comfortable': return 'py-4 px-6 text-base';
       default: return 'py-2.5 px-4 text-sm';
     }
+  };
+
+  const handleGridCellUpdate = (rowIndex: number, columnKey: string, value: string) => {
+    if (!data) return;
+    
+    const updatedRows = [...data.rows];
+    const targetRow = filteredRows[rowIndex];
+    const originalIndex = data.rows.indexOf(targetRow);
+    
+    if (originalIndex !== -1) {
+      updatedRows[originalIndex] = {
+        ...updatedRows[originalIndex],
+        [columnKey]: value
+      };
+      
+      setData({
+        ...data,
+        rows: updatedRows
+      });
+    }
+    setGridEditingCell(null);
   };
 
   const resetApp = () => {
@@ -903,6 +941,9 @@ export default function App() {
                     {selectedRows.size === filteredRows.length && filteredRows.length > 0 && <Check size={10} strokeWidth={4} />}
                   </button>
                 </th>
+                <th className="w-10 px-2 py-3 border-b border-stone-200 bg-stone-100 sticky left-10 z-20">
+                  {/* Expand Trigger Header */}
+                </th>
                 {columnOrder.filter(h => visibleColumns.has(h)).map((header: string) => (
                   <th
                     key={header}
@@ -1018,9 +1059,8 @@ export default function App() {
               {filteredRows.map((row, idx) => (
                 <tr
                   key={idx}
-                  onClick={() => handleRowClick(idx)}
                   className={cn(
-                    "group cursor-pointer transition-colors border-b border-stone-100",
+                    "group transition-colors border-b border-stone-100",
                     selectedIndex === idx ? "bg-blue-50/50" : "hover:bg-stone-50 odd:bg-white even:bg-stone-50/30",
                     selectedRows.has(idx) && "bg-blue-50/30"
                   )}
@@ -1036,17 +1076,41 @@ export default function App() {
                       {selectedRows.has(idx) && <Check size={10} strokeWidth={4} />}
                     </button>
                   </td>
+                  <td className={cn("w-10 border-b border-stone-100 sticky left-10 z-10 bg-inherit", getDensityPadding())}>
+                    <button 
+                      onClick={() => handleRowClick(idx)}
+                      className="p-1 rounded text-stone-400 hover:text-blue-600 hover:bg-blue-50 transition-all opacity-0 group-hover:opacity-100"
+                      title="Expand Details"
+                    >
+                      <ChevronsRight size={14} />
+                    </button>
+                  </td>
                   {columnOrder.filter(h => visibleColumns.has(h)).map((header) => (
                     <td
                       key={header}
                       style={{ width: columnWidths[header] || 150 }}
+                      onClick={() => setGridEditingCell({ rowIndex: idx, columnKey: header })}
                       className={cn(
-                        "text-stone-600 border-b border-stone-100 truncate transition-colors",
+                        "text-stone-600 border-b border-stone-100 truncate transition-colors relative",
                         getDensityPadding(),
-                        hoveredColumn === header && "bg-blue-50/20"
+                        hoveredColumn === header && "bg-blue-50/20",
+                        gridEditingCell?.rowIndex === idx && gridEditingCell?.columnKey === header ? "p-0" : "cursor-text"
                       )}
                     >
-                      <FormattedCell value={row[header]} />
+                      {gridEditingCell?.rowIndex === idx && gridEditingCell?.columnKey === header ? (
+                        <input
+                          autoFocus
+                          defaultValue={String(row[header] ?? '')}
+                          onBlur={(e) => handleGridCellUpdate(idx, header, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleGridCellUpdate(idx, header, e.currentTarget.value);
+                            if (e.key === 'Escape') setGridEditingCell(null);
+                          }}
+                          className="w-full h-full px-4 py-2 bg-white border-2 border-blue-500 outline-none shadow-inner"
+                        />
+                      ) : (
+                        <FormattedCell value={row[header]} />
+                      )}
                     </td>
                   ))}
                 </tr>
