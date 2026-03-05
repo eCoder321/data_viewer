@@ -53,6 +53,16 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const getColumnLetter = (index: number): string => {
+  let letter = '';
+  let i = index;
+  while (i >= 0) {
+    letter = String.fromCharCode((i % 26) + 65) + letter;
+    i = Math.floor(i / 26) - 1;
+  }
+  return letter;
+};
+
 const FormattedCell = ({ value }: { value: any }) => {
   const strValue = String(value ?? '');
   
@@ -923,83 +933,94 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto relative bg-stone-50">
-        <div className="min-w-full inline-block align-middle">
-          <table className="min-w-full border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-stone-100">
-                <th className="w-10 px-4 py-3 border-b border-stone-200 bg-stone-100 sticky left-0 z-20">
-                  <button 
-                    onClick={toggleAllSelection}
-                    className={cn(
-                      "w-4 h-4 border rounded flex items-center justify-center transition-colors",
-                      selectedRows.size === filteredRows.length && filteredRows.length > 0
-                        ? "bg-blue-600 border-blue-600 text-white" 
-                        : "border-stone-300 bg-white"
-                    )}
-                  >
-                    {selectedRows.size === filteredRows.length && filteredRows.length > 0 && <Check size={10} strokeWidth={4} />}
-                  </button>
-                </th>
-                <th className="w-10 px-2 py-3 border-b border-stone-200 bg-stone-100 sticky left-10 z-20">
-                  {/* Expand Trigger Header */}
-                </th>
-                {columnOrder.filter(h => visibleColumns.has(h)).map((header: string) => (
-                  <th
-                    key={header}
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData('text/plain', header)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const draggedHeader = e.dataTransfer.getData('text/plain');
-                      if (draggedHeader !== header) moveColumn(draggedHeader, header);
-                    }}
-                    onMouseEnter={() => setHoveredColumn(header)}
-                    onMouseLeave={() => setHoveredColumn(null)}
-                    onClick={() => toggleSort(header)}
-                    style={{ width: columnWidths[header] || 150 }}
-                    className={cn(
-                      "text-left text-[11px] font-bold text-stone-500 uppercase tracking-wider border-b border-stone-200 whitespace-nowrap cursor-grab active:cursor-grabbing transition-colors group/th relative",
-                      getDensityPadding(),
-                      hoveredColumn === header ? "bg-stone-200" : "bg-stone-100"
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      {header}
-                      <div className={cn(
-                        "transition-opacity",
-                        sortConfig.key === header ? "opacity-100" : "opacity-0 group-hover/th:opacity-50"
-                      )}>
-                        {sortConfig.key === header && sortConfig.direction === 'desc' ? (
-                          <ArrowDown size={12} />
-                        ) : (
-                          <ArrowUp size={12} />
-                        )}
-                      </div>
-                      
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveFilterColumn(activeFilterColumn === header ? null : header);
-                        }}
+      <main className="flex-1 overflow-auto relative bg-[#F5F5F4]/50 backdrop-blur-xl">
+        <div className="min-w-full inline-block align-middle p-4">
+          <div className="bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-white/40 overflow-hidden">
+            <table className="min-w-full border-separate border-spacing-0">
+              <thead className="sticky top-0 z-30">
+                <tr className="bg-white/80 backdrop-blur-md">
+                  <th className="w-12 px-0 py-0 border-b border-r border-slate-200/50 bg-slate-50/80 sticky left-0 z-40">
+                    <div className="flex items-center justify-center h-full w-full">
+                      <button 
+                        onClick={toggleAllSelection}
                         className={cn(
-                          "ml-auto p-1 rounded hover:bg-stone-300 transition-colors",
-                          columnFilters[header] ? "text-blue-600 opacity-100" : "text-stone-400 opacity-0 group-hover/th:opacity-100"
+                          "w-4 h-4 border rounded flex items-center justify-center transition-colors",
+                          selectedRows.size === filteredRows.length && filteredRows.length > 0
+                            ? "bg-blue-600 border-blue-600 text-white" 
+                            : "border-stone-300 bg-white"
                         )}
                       >
-                        <Filter size={12} fill={columnFilters[header] ? "currentColor" : "none"} />
+                        {selectedRows.size === filteredRows.length && filteredRows.length > 0 && <Check size={10} strokeWidth={4} />}
                       </button>
                     </div>
-
-                    {/* Resize Handle */}
-                    <div 
-                      onMouseDown={(e) => startResizing(e, header)}
+                  </th>
+                  <th className="w-10 border-b border-r border-slate-200/50 bg-slate-50/80 sticky left-12 z-40">
+                    {/* Expand Trigger Header */}
+                  </th>
+                  {columnOrder.filter(h => visibleColumns.has(h)).map((header: string, colIdx: number) => (
+                    <th
+                      key={header}
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData('text/plain', header)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const draggedHeader = e.dataTransfer.getData('text/plain');
+                        if (draggedHeader !== header) moveColumn(draggedHeader, header);
+                      }}
+                      onMouseEnter={() => setHoveredColumn(header)}
+                      onMouseLeave={() => setHoveredColumn(null)}
+                      onClick={() => toggleSort(header)}
+                      style={{ width: columnWidths[header] || 150 }}
                       className={cn(
-                        "absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 transition-colors z-20",
-                        resizingColumn?.key === header ? "bg-blue-500 w-0.5" : "bg-transparent"
+                        "text-left border-b border-r border-slate-200/50 whitespace-nowrap cursor-grab active:cursor-grabbing transition-all group/th relative p-1",
+                        hoveredColumn === header ? "bg-slate-100/80" : "bg-white/40"
                       )}
-                    />
+                    >
+                      <div className="flex flex-col h-full">
+                        <div className="text-[9px] font-bold text-slate-400 mb-1 px-2 flex justify-between items-center">
+                          <span>{getColumnLetter(colIdx)}</span>
+                          {columnFilters[header] && <div className="w-1 h-1 rounded-full bg-blue-500" />}
+                        </div>
+                        <div className={cn(
+                          "flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all",
+                          hoveredColumn === header ? "bg-gradient-to-b from-white to-slate-50 shadow-sm ring-1 ring-black/5" : "bg-transparent"
+                        )}>
+                          <span className="text-[11px] font-bold text-slate-700 uppercase tracking-tight truncate flex-1">{header}</span>
+                          <div className={cn(
+                            "transition-opacity shrink-0",
+                            sortConfig.key === header ? "opacity-100 text-blue-600" : "opacity-0 group-hover/th:opacity-50"
+                          )}>
+                            {sortConfig.key === header && sortConfig.direction === 'desc' ? (
+                              <ArrowDown size={10} />
+                            ) : (
+                              <ArrowUp size={10} />
+                            )}
+                          </div>
+                          
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveFilterColumn(activeFilterColumn === header ? null : header);
+                            }}
+                            className={cn(
+                              "p-1 rounded hover:bg-slate-100 transition-colors shrink-0",
+                              columnFilters[header] ? "text-blue-600 opacity-100" : "text-slate-400 opacity-0 group-hover/th:opacity-100"
+                            )}
+                          >
+                            <Filter size={10} fill={columnFilters[header] ? "currentColor" : "none"} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Resize Handle */}
+                      <div 
+                        onMouseDown={(e) => startResizing(e, header)}
+                        className={cn(
+                          "absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400/50 transition-colors z-20 group-hover/th:opacity-100 opacity-0",
+                          resizingColumn?.key === header ? "bg-blue-500/50 opacity-100" : ""
+                        )}
+                      />
 
                     {/* Filter Dropdown */}
                     <AnimatePresence>
@@ -1055,28 +1076,29 @@ export default function App() {
                 ))}
               </tr>
             </thead>
-            <tbody className="bg-white">
+            <tbody className="bg-white/40">
               {filteredRows.map((row, idx) => (
                 <tr
                   key={idx}
                   className={cn(
-                    "group transition-colors border-b border-stone-100",
-                    selectedIndex === idx ? "bg-blue-50/50" : "hover:bg-stone-50 odd:bg-white even:bg-stone-50/30",
-                    selectedRows.has(idx) && "bg-blue-50/30"
+                    "group transition-colors",
+                    selectedIndex === idx ? "bg-blue-50/30" : "hover:bg-slate-50/50 odd:bg-white/20 even:bg-slate-50/10",
+                    selectedRows.has(idx) && "bg-blue-50/40"
                   )}
                 >
-                  <td className={cn("w-10 border-b border-stone-100 sticky left-0 z-10 bg-inherit", getDensityPadding())}>
+                  <td className={cn("w-12 border-b border-r border-slate-200/50 sticky left-0 z-20 bg-slate-50/80 text-[10px] font-mono text-slate-400 flex items-center justify-center gap-2", getDensityPadding())}>
+                    <span className="w-4 text-right">{idx + 1}</span>
                     <button 
                       onClick={(e) => toggleRowSelection(e, idx)}
                       className={cn(
-                        "w-4 h-4 border rounded flex items-center justify-center transition-colors",
+                        "w-3.5 h-3.5 border rounded flex items-center justify-center transition-colors shrink-0",
                         selectedRows.has(idx) ? "bg-blue-600 border-blue-600 text-white" : "border-stone-300 bg-white"
                       )}
                     >
-                      {selectedRows.has(idx) && <Check size={10} strokeWidth={4} />}
+                      {selectedRows.has(idx) && <Check size={8} strokeWidth={4} />}
                     </button>
                   </td>
-                  <td className={cn("w-10 border-b border-stone-100 sticky left-10 z-10 bg-inherit", getDensityPadding())}>
+                  <td className={cn("w-10 border-b border-r border-slate-200/50 sticky left-12 z-20 bg-slate-50/80", getDensityPadding())}>
                     <button 
                       onClick={() => handleRowClick(idx)}
                       className="p-1 rounded text-stone-400 hover:text-blue-600 hover:bg-blue-50 transition-all opacity-0 group-hover:opacity-100"
@@ -1085,34 +1107,37 @@ export default function App() {
                       <ChevronsRight size={14} />
                     </button>
                   </td>
-                  {columnOrder.filter(h => visibleColumns.has(h)).map((header) => (
-                    <td
-                      key={header}
-                      style={{ width: columnWidths[header] || 150 }}
-                      onClick={() => setGridEditingCell({ rowIndex: idx, columnKey: header })}
-                      className={cn(
-                        "text-stone-600 border-b border-stone-100 truncate transition-colors relative",
-                        getDensityPadding(),
-                        hoveredColumn === header && "bg-blue-50/20",
-                        gridEditingCell?.rowIndex === idx && gridEditingCell?.columnKey === header ? "p-0" : "cursor-text"
-                      )}
-                    >
-                      {gridEditingCell?.rowIndex === idx && gridEditingCell?.columnKey === header ? (
-                        <input
-                          autoFocus
-                          defaultValue={String(row[header] ?? '')}
-                          onBlur={(e) => handleGridCellUpdate(idx, header, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleGridCellUpdate(idx, header, e.currentTarget.value);
-                            if (e.key === 'Escape') setGridEditingCell(null);
-                          }}
-                          className="w-full h-full px-4 py-2 bg-white border-2 border-blue-500 outline-none shadow-inner"
-                        />
-                      ) : (
-                        <FormattedCell value={row[header]} />
-                      )}
-                    </td>
-                  ))}
+                  {columnOrder.filter(h => visibleColumns.has(h)).map((header) => {
+                    const isEditing = gridEditingCell?.rowIndex === idx && gridEditingCell?.columnKey === header;
+                    return (
+                      <td
+                        key={header}
+                        style={{ width: columnWidths[header] || 150 }}
+                        onClick={() => setGridEditingCell({ rowIndex: idx, columnKey: header })}
+                        className={cn(
+                          "text-slate-600 border-b border-r border-slate-200/50 truncate transition-all relative",
+                          getDensityPadding(),
+                          hoveredColumn === header && "bg-blue-50/10",
+                          isEditing ? "p-0 ring-2 ring-blue-500 ring-inset z-10 shadow-lg" : "cursor-text hover:bg-slate-100/30"
+                        )}
+                      >
+                        {isEditing ? (
+                          <input
+                            autoFocus
+                            defaultValue={String(row[header] ?? '')}
+                            onBlur={(e) => handleGridCellUpdate(idx, header, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleGridCellUpdate(idx, header, e.currentTarget.value);
+                              if (e.key === 'Escape') setGridEditingCell(null);
+                            }}
+                            className="w-full h-full px-3 py-1 bg-white outline-none font-sans text-sm"
+                          />
+                        ) : (
+                          <FormattedCell value={row[header]} />
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -1125,7 +1150,8 @@ export default function App() {
             </div>
           )}
         </div>
-      </main>
+      </div>
+    </main>
 
       {/* Footer Stats */}
       <div className="h-10 bg-white border-t border-stone-200 flex items-center px-4 justify-between text-[10px] font-bold text-stone-400 uppercase tracking-widest shrink-0 z-20">
